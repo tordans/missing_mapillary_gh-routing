@@ -55,7 +55,7 @@ if (document.readyState === 'loading') {
 
 async function initMap() {
   // Load pmtiles protocol
-  const pmtilesBaseURL = "https://f003.backblazeb2.com/file/nettobreite/";
+  const pmtilesBaseURL = "https://tiles.vizsim.de/file/nettobreite/";
   const protocol = new pmtiles.Protocol(name => `${pmtilesBaseURL}${name}`);
   maplibregl.addProtocol("pmtiles", protocol.tile);
 

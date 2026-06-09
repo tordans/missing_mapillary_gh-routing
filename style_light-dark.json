@@ -23,7 +23,7 @@
   "sources": {
     "openmaptiles": {
       "type": "vector",
-      "url": "pmtiles://https://f003.backblazeb2.com/file/unfallkarte-data/planetiler-de.pmtiles",
+      "url": "pmtiles://https://tiles.vizsim.de/file/unfallkarte-data/planetiler-de.pmtiles",
       "attribution": "© OpenStreetMap contributors | Tiles © OpenMapTiles"
     }
   },
