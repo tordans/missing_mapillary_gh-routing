@@ -6,6 +6,7 @@ import { setupUIHandlers } from './routingUI.js';
 import { setupHeightgraphHandlers, drawHeightgraph, cleanupHeightgraphHandlers } from './heightgraph.js';
 import { setupRouteHover, updateRouteColor } from './routeVisualization.js';
 import { setupRouteProfileBars, updateRouteProfileBars, clearRouteProfileBars } from './routeProfile/routeProfileBars.js';
+import { setupRouteProfile3D, update3D, clearRouteProfile3D } from './routeProfile3D/routeProfile3D.js';
 import { clearCursor } from './routeCursor.js';
 import {
   supportsCustomModel,
@@ -597,6 +598,7 @@ export function setupRouting(map) {
   setupUIHandlers(map);
   setupHeightgraphHandlers();
   setupRouteProfileBars(map);
+  setupRouteProfile3D(map);
 
   // Automatically activate start point selection mode on map load
   // BUT only if no points were loaded from permalink
@@ -1023,6 +1025,9 @@ export async function calculateRoute(map, start, end, waypoints = []) {
         // Update on-map route profile bars (perpendicular histogram)
         updateRouteProfileBars();
 
+        // Update 3D route profile (fill-extrusion columns)
+        update3D();
+
         // Calculate comparison with Weight=1 if current weight < 1
         if (supportsCustomModel(routeState.selectedProfile) && routeState.customModel) {
           const currentWeight = getMapillaryPriority(routeState.customModel);
@@ -1109,8 +1114,9 @@ export function clearRoute(map) {
   // Cleanup heightgraph event handlers
   cleanupHeightgraphHandlers();
 
-  // Clear on-map route profile bars and the shared cursor
+  // Clear on-map route profile bars, 3D columns, and the shared cursor
   clearRouteProfileBars();
+  clearRouteProfile3D();
   clearCursor();
 
   routeState.reset();
