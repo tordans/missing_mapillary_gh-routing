@@ -35,11 +35,12 @@ const options = {
   scheme: 'danger',
   maxHeightMeters: 250,
   buildings: true,
-  terrain: false,
+  terrain: true,
 };
 
 // Defaults used to keep shared URLs short (only non-defaults are serialized).
-const DEFAULTS = { variant: 'route', valueKey: 'elevation', scheme: 'danger', maxHeightMeters: 250, buildings: true, terrain: false };
+// buildings + terrain default ON: activating 3D turns the whole 3D scene on.
+const DEFAULTS = { variant: 'route', valueKey: 'elevation', scheme: 'danger', maxHeightMeters: 250, buildings: true, terrain: true };
 
 // 3D terrain look, aligned with the gradients2osm reference (Mapterhorn DEM +
 // blue atmospheric sky). The app already provides the 'terrain' raster-dem source.
@@ -137,6 +138,12 @@ function setupControls() {
     toggle.addEventListener('change', (e) => {
       options.enabled = e.target.checked;
       if (controls) controls.style.display = options.enabled ? 'block' : 'none';
+      // Activating the 3D graph also activates the 3D buildings + terrain scene.
+      if (options.enabled) {
+        options.buildings = true;
+        options.terrain = true;
+        syncControlsFromOptions();
+      }
       applyCamera();
       applyTerrain();
       update3D();
