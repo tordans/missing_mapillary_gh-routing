@@ -25,6 +25,7 @@ const IDS = {
   scheme: 'profile3d-scheme',
   height: 'profile3d-height',
   buildings: 'profile3d-buildings',
+  terrain: 'profile3d-terrain',
 };
 
 const options = {
@@ -34,14 +35,30 @@ const options = {
   scheme: 'danger',
   maxHeightMeters: 250,
   buildings: true,
+  terrain: false,
 };
 
 // Defaults used to keep shared URLs short (only non-defaults are serialized).
-const DEFAULTS = { variant: 'route', valueKey: 'elevation', scheme: 'danger', maxHeightMeters: 250, buildings: true };
+const DEFAULTS = { variant: 'route', valueKey: 'elevation', scheme: 'danger', maxHeightMeters: 250, buildings: true, terrain: false };
+
+// 3D terrain look, aligned with the gradients2osm reference (Mapterhorn DEM +
+// blue atmospheric sky). The app already provides the 'terrain' raster-dem source.
+const TERRAIN_SOURCE = 'terrain';
+const TERRAIN_EXAGGERATION = 1.5;
+const SKY_STYLE = {
+  'sky-color': '#199EF3',
+  'sky-horizon-blend': 0.7,
+  'horizon-color': '#f0f8ff',
+  'horizon-fog-blend': 0.8,
+  'fog-color': '#2c7fb8',
+  'fog-ground-blend': 0.9,
+  'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 10, 1, 13, 0],
+};
 
 const ENABLED_PITCH = 55;
 let mapRef = null;
 let controlsWired = false;
+let terrainAppliedByUs = false;
 
 // Notify listeners (the permalink) that a user-facing 3D option changed.
 function notifyChange() {
@@ -60,8 +77,11 @@ export function setupRouteProfile3D(map) {
     controlsWired = true;
   }
   update3D();
-  // Restore the tilted view when arriving with 3D enabled (e.g. from a shared URL).
-  if (options.enabled) applyCamera();
+  // Restore the tilted view (+ terrain) when arriving with 3D enabled from a URL.
+  if (options.enabled) {
+    applyCamera();
+    applyTerrain();
+  }
 }
 
 function ensureLayers(map) {
@@ -118,6 +138,7 @@ function setupControls() {
       options.enabled = e.target.checked;
       if (controls) controls.style.display = options.enabled ? 'block' : 'none';
       applyCamera();
+      applyTerrain();
       update3D();
       notifyChange();
     });
@@ -143,6 +164,16 @@ function setupControls() {
     buildings.addEventListener('change', (e) => {
       options.buildings = e.target.checked;
       updateBuildingsVisibility();
+      notifyChange();
+    });
+  }
+
+  const terrain = document.getElementById(IDS.terrain);
+  if (terrain) {
+    terrain.checked = options.terrain;
+    terrain.addEventListener('change', (e) => {
+      options.terrain = e.target.checked;
+      applyTerrain();
       notifyChange();
     });
   }
@@ -187,6 +218,24 @@ function applyCamera() {
     if (mapRef.getPitch() < 30) mapRef.easeTo({ pitch: ENABLED_PITCH, duration: 600 });
   } else {
     mapRef.easeTo({ pitch: 0, duration: 600 });
+  }
+}
+
+// 3D terrain mesh + atmospheric sky (gradients2osm style). Only removes terrain
+// we ourselves added, so it doesn't clobber the separate map-settings terrain.
+function applyTerrain() {
+  if (!mapRef) return;
+  const on = options.enabled && options.terrain;
+  if (on) {
+    if (mapRef.getSource(TERRAIN_SOURCE)) {
+      mapRef.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
+    }
+    if (typeof mapRef.setSky === 'function') mapRef.setSky(SKY_STYLE);
+    terrainAppliedByUs = true;
+  } else if (terrainAppliedByUs) {
+    mapRef.setTerrain(null);
+    if (typeof mapRef.setSky === 'function') mapRef.setSky(undefined);
+    terrainAppliedByUs = false;
   }
 }
 
@@ -284,6 +333,7 @@ function syncControlsFromOptions() {
   set(IDS.scheme, options.scheme);
   set(IDS.height, String(options.maxHeightMeters));
   setChecked(IDS.buildings, options.buildings);
+  setChecked(IDS.terrain, options.terrain);
 }
 
 /** URL params for the current 3D state — only when enabled, only non-defaults. */
@@ -295,6 +345,7 @@ export function serializeProfile3DParams() {
   if (options.scheme !== DEFAULTS.scheme) parts.push(`p3dcolor=${options.scheme}`);
   if (options.maxHeightMeters !== DEFAULTS.maxHeightMeters) parts.push(`p3dh=${options.maxHeightMeters}`);
   if (options.buildings !== DEFAULTS.buildings) parts.push(`p3dbld=${options.buildings ? 1 : 0}`);
+  if (options.terrain !== DEFAULTS.terrain) parts.push(`p3dterr=${options.terrain ? 1 : 0}`);
   return parts;
 }
 
@@ -313,8 +364,14 @@ export function applyProfile3DParams(params) {
   const bld = params.get('p3dbld');
   if (bld === '0') options.buildings = false;
   else if (bld === '1') options.buildings = true;
+  const terr = params.get('p3dterr');
+  if (terr === '1') options.terrain = true;
+  else if (terr === '0') options.terrain = false;
   // Reflect + redraw if the map/controls are already up (otherwise setup does it).
   syncControlsFromOptions();
   update3D();
-  if (options.enabled) applyCamera();
+  if (options.enabled) {
+    applyCamera();
+    applyTerrain();
+  }
 }
