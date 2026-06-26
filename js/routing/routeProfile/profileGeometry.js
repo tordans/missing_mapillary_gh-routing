@@ -52,40 +52,49 @@ function resample(xy, cum, step) {
   return out;
 }
 
-// Moving-average smoothing with a symmetric window of radius w samples.
-function smooth(points, w) {
-  if (w < 1) return points.slice();
+// Endpoint-preserving Laplacian smoothing: each interior point relaxes toward the
+// midpoint of its neighbours. Unlike a wide moving average it does NOT collapse the
+// curve to its centroid — it converges toward the straight chord between the fixed
+// endpoints, which is exactly the "more straight than curvy" baseline we want.
+function laplacianSmooth(points, iters, lambda = 0.5) {
   const n = points.length;
-  const out = new Array(n);
-  for (let i = 0; i < n; i++) {
-    let sx = 0;
-    let sy = 0;
-    let c = 0;
-    for (let j = Math.max(0, i - w); j <= Math.min(n - 1, i + w); j++) {
-      sx += points[j][0];
-      sy += points[j][1];
-      c++;
+  let cur = points.map((p) => [p[0], p[1]]);
+  if (n < 3 || iters < 1) return cur;
+  let next = points.map((p) => [p[0], p[1]]);
+  for (let it = 0; it < iters; it++) {
+    for (let i = 1; i < n - 1; i++) {
+      next[i][0] = cur[i][0] + lambda * ((cur[i - 1][0] + cur[i + 1][0]) / 2 - cur[i][0]);
+      next[i][1] = cur[i][1] + lambda * ((cur[i - 1][1] + cur[i + 1][1]) / 2 - cur[i][1]);
     }
-    out[i] = [sx / c, sy / c];
+    const tmp = cur;
+    cur = next;
+    next = tmp;
   }
-  return out;
+  return cur;
 }
 
-// Moving-average smoothing for a scalar array (window radius w).
-function smooth1d(arr, w) {
-  if (w < 1) return arr.slice();
-  const n = arr.length;
-  const out = new Array(n);
-  for (let i = 0; i < n; i++) {
-    let s = 0;
-    let c = 0;
-    for (let j = Math.max(0, i - w); j <= Math.min(n - 1, i + w); j++) {
-      s += arr[j];
-      c++;
+// Does an (open) polyline cross itself? O(n^2) over non-adjacent segment pairs.
+function ccw(a, b, c) {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+function segmentsIntersect(p1, p2, p3, p4) {
+  const d1 = ccw(p3, p4, p1);
+  const d2 = ccw(p3, p4, p2);
+  const d3 = ccw(p1, p2, p3);
+  const d4 = ccw(p1, p2, p4);
+  return (
+    ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+  );
+}
+function polylineSelfIntersects(P) {
+  const n = P.length;
+  for (let i = 0; i < n - 1; i++) {
+    for (let j = i + 2; j < n - 1; j++) {
+      if (segmentsIntersect(P[i], P[i + 1], P[j], P[j + 1])) return true;
     }
-    out[i] = s / c;
   }
-  return out;
+  return false;
 }
 
 // Unit tangents via central difference.
@@ -170,37 +179,34 @@ export function buildProfileBars(coordinates, segmentValues, opts = {}) {
   const smoothMeters = opts.smoothingMeters != null ? opts.smoothingMeters : barWidth * 3;
   const offset = opts.baseOffsetMeters != null ? opts.baseOffsetMeters : maxLen * 0.08;
 
-  // 1. Smooth, offset baseline (the abstracted "curved X-axis").
+  // 1. Clean, mostly-straight baseline (the abstracted "curved X-axis").
+  // Smooth the centerline and offset it; then keep increasing the smoothing window
+  // until even the bar tips form a *simple* (non-self-intersecting) line. Offset
+  // curves fold on the inside of bends sharper than the offset distance, so
+  // straightening those bends until the fold disappears guarantees a clean line
+  // with no overlapping bars — leaning straight rather than curvy, as desired.
   const R = resample(xy, cumOrig, step); // R[k] at arc-length k*step
   if (R.length < 3) return emptyResult();
   const K = R.length;
-  const w = Math.max(0, Math.round(smoothMeters / step));
-  const S = smooth(R, w);
-  const T = tangents(S);
-  const N = T.map(([dx, dy]) => (side === 'left' ? [-dy, dx] : [dy, -dx]));
-
-  // The baseline = smoothed centerline pushed outward by `offset` PLUS the route's
-  // own outward deviation from that centerline. Without the deviation term a very
-  // smooth baseline would be crossed by the wiggly route at its peaks; with it the
-  // baseline stays a clean ~`offset` clear of the route everywhere. The deviation
-  // is dilated over the smoothing window (so peaks are cleared) then re-smoothed.
-  const dev = new Array(K);
-  for (let k = 0; k < K; k++) {
-    dev[k] = Math.max(0, (R[k][0] - S[k][0]) * N[k][0] + (R[k][1] - S[k][1]) * N[k][1]);
+  const reach = offset + maxLen; // farthest a bar tip can sit from the centerline
+  // Laplacian iterations needed to smooth over `smoothMeters` (~ (scale/spacing)^2).
+  const baseIters = Math.max(2, Math.round((smoothMeters / step) ** 2));
+  const maxIters = Math.max(baseIters, 6000);
+  let S;
+  let T;
+  let N;
+  let iters = baseIters;
+  for (let attempt = 0; attempt < 14; attempt++) {
+    S = laplacianSmooth(R, iters);
+    T = tangents(S);
+    N = T.map(([dx, dy]) => (side === 'left' ? [-dy, dx] : [dy, -dx]));
+    const outer = S.map((p, k) => [p[0] + N[k][0] * reach, p[1] + N[k][1] * reach]);
+    if (!polylineSelfIntersects(outer) || iters >= maxIters) break;
+    iters = Math.min(maxIters, iters * 2);
   }
-  const devClear = new Array(K);
-  for (let k = 0; k < K; k++) {
-    let m = 0;
-    const lo = Math.max(0, k - w);
-    const hi = Math.min(K - 1, k + w);
-    for (let j = lo; j <= hi; j++) if (dev[j] > m) m = dev[j];
-    devClear[k] = m;
-  }
-  const devSmooth = smooth1d(devClear, Math.max(1, Math.round(w / 2)));
-  const B = S.map((p, k) => {
-    const d = offset + devSmooth[k];
-    return [p[0] + N[k][0] * d, p[1] + N[k][1] * d];
-  });
+  const B = S.map((p, k) => [p[0] + N[k][0] * offset, p[1] + N[k][1] * offset]);
+  const baselineCum = cumulative(B);
+  const D = baselineCum[K - 1] || 1; // baseline length
 
   // 2. Value at each resample point (piecewise-constant from the route segments).
   const gv = new Array(K).fill(null);
@@ -221,15 +227,37 @@ export function buildProfileBars(coordinates, segmentValues, opts = {}) {
   };
   const nearest = (arr, idx) => arr[Math.max(0, Math.min(arr.length - 1, Math.round(idx)))];
 
-  // 3. Resample one value per uniform bar (mean over the bar's arc-length window).
-  const numBars = Math.max(1, Math.floor(L / barWidth));
+  // Fractional resample index at a given baseline arc-length (so we can place
+  // things by distance ALONG the baseline rather than by route arc-length).
+  const fracIndexAtArc = (s) => {
+    if (s <= 0) return 0;
+    if (s >= D) return K - 1;
+    let lo = 0;
+    let hi = K - 1;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (baselineCum[m] < s) lo = m + 1;
+      else hi = m;
+    }
+    const i0 = Math.max(0, lo - 1);
+    const segLen = baselineCum[lo] - baselineCum[i0] || 1;
+    return i0 + (s - baselineCum[i0]) / segLen;
+  };
+
+  // 3. Bars are spaced evenly along the BASELINE (not the route), so a straighter
+  // baseline never crowds or overlaps them. Each bar averages the route value over
+  // the route span that maps to its slice of the baseline.
+  const numBars = Math.max(1, Math.floor(D / barWidth));
+  const barW = D / numBars;
+  const fracMid = new Array(numBars);
   const raw = new Array(numBars).fill(null);
   for (let j = 0; j < numBars; j++) {
-    const i0 = Math.round((j * barWidth) / step);
-    const i1 = Math.round(((j + 1) * barWidth) / step);
+    const kLo = Math.round(fracIndexAtArc(j * barW));
+    const kHi = Math.round(fracIndexAtArc((j + 1) * barW));
+    fracMid[j] = fracIndexAtArc((j + 0.5) * barW);
     let sum = 0;
     let c = 0;
-    for (let k = i0; k <= i1 && k < K; k++) {
+    for (let k = kLo; k <= kHi && k < K; k++) {
       if (gv[k] != null) {
         sum += gv[k];
         c++;
@@ -257,11 +285,11 @@ export function buildProfileBars(coordinates, segmentValues, opts = {}) {
     const len = t * maxLen;
     if (len <= 0) continue;
 
-    const centerIdx = ((j + 0.5) * barWidth) / step;
-    const P = at(B, centerIdx);
-    const tan = nearest(T, centerIdx);
-    const nor = nearest(N, centerIdx);
-    const hw = (barWidth * gap) / 2;
+    const idx = fracMid[j];
+    const P = at(B, idx);
+    const tan = nearest(T, idx);
+    const nor = nearest(N, idx);
+    const hw = (barW * gap) / 2;
 
     const b1 = [P[0] - tan[0] * hw, P[1] - tan[1] * hw];
     const b2 = [P[0] + tan[0] * hw, P[1] + tan[1] * hw];
@@ -269,9 +297,9 @@ export function buildProfileBars(coordinates, segmentValues, opts = {}) {
     const t1 = [b1[0] + nor[0] * len, b1[1] + nor[1] * len];
     const ring = [b1, b2, t2, t1, b1].map(proj.toLngLat);
 
-    // Route-coordinate index at this bar's center — lets the shared cursor map a
-    // hovered bar back to a position on the route line and height profile.
-    const routeIndex = nearestIndexByArcLength(cumOrig, (j + 0.5) * barWidth);
+    // Route-coordinate index at this bar's center (resample index idx -> route
+    // arc-length idx*step) — lets the shared cursor map a hovered bar to the route.
+    const routeIndex = nearestIndexByArcLength(cumOrig, idx * step);
 
     features.push({
       type: 'Feature',
