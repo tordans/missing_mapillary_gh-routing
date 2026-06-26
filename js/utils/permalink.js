@@ -25,6 +25,7 @@ export class Permalink {
     this.map = map;
     this.isUpdating = false;
     this.pendingRouteCalculation = false; // Flag to track if route should be calculated after map loads
+    this.pendingBasemap = null; // basemap from the URL, until its restore lands (avoids a transient URL strip)
     this.setupEventListeners();
     // Load from URL asynchronously (don't await to avoid blocking constructor)
     this.loadFromURL().catch(err => {
@@ -113,6 +114,15 @@ export class Permalink {
       currentEncodedType: routeState.currentEncodedType,
       customModel: routeState.customModel
     };
+  }
+
+  // Currently selected basemap ("map background"): standard | dark | osm | satellite.
+  getCurrentBasemap() {
+    // Hold the URL's value until its deferred restore has actually switched the basemap.
+    if (this.pendingBasemap) return this.pendingBasemap;
+    const el = document.querySelector('.basemap-btn.selected, .basemap-thumb.selected');
+    const map = el && el.dataset ? el.dataset.map : null;
+    return ['standard', 'dark', 'osm', 'satellite'].includes(map) ? map : 'standard';
   }
 
   updateURL() {
@@ -207,6 +217,10 @@ export class Permalink {
     if (toggleMissingStreets && toggleMissingStreets.checked) {
       paramParts.push('missingStreets=1');
     }
+
+    // Map background (basemap) — only when not the default
+    const basemap = this.getCurrentBasemap();
+    if (basemap !== 'standard') paramParts.push(`basemap=${basemap}`);
 
     // Route profile bars (2D) + 3D columns settings
     paramParts.push(...serializeProfileBarsParams());
@@ -611,6 +625,24 @@ export class Permalink {
       }
     }
     
+    // Restore the basemap ("map background"). Done after the map has loaded by
+    // triggering the basemap button's own click handler (it does the theme /
+    // setStyle switching and route restore). 'standard' is the default → skip.
+    const basemapParam = params.get('basemap');
+    if (['dark', 'osm', 'satellite'].includes(basemapParam)) {
+      this.pendingBasemap = basemapParam; // keep it in the URL until the restore lands
+      const restoreBasemap = () => {
+        const btn = document.querySelector(`.basemap-btn[data-map="${basemapParam}"]`);
+        if (btn && !btn.classList.contains('selected')) btn.click();
+        this.pendingBasemap = null;
+      };
+      if (this.map.loaded()) {
+        setTimeout(restoreBasemap, PERMALINK_CONFIG.LAYER_ACTIVATION_DELAY);
+      } else {
+        this.map.once('load', () => setTimeout(restoreBasemap, PERMALINK_CONFIG.LAYER_ACTIVATION_DELAY));
+      }
+    }
+
     // If both start and end points are loaded, mark for route calculation
     // Route will be calculated after map is loaded and routing sources exist
     if (routeState.startPoint && routeState.endPoint) {
@@ -749,6 +781,9 @@ export class Permalink {
     if (toggleMissingStreets && toggleMissingStreets.checked) {
       paramParts.push('missingStreets=1');
     }
+
+    const shareBasemap = this.getCurrentBasemap();
+    if (shareBasemap !== 'standard') paramParts.push(`basemap=${shareBasemap}`);
 
     paramParts.push(...serializeProfileBarsParams());
     paramParts.push(...serializeProfile3DParams());
