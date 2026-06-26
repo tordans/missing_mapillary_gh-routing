@@ -36,10 +36,17 @@ const options = {
   buildings: true,
 };
 
+// Defaults used to keep shared URLs short (only non-defaults are serialized).
+const DEFAULTS = { variant: 'route', valueKey: 'elevation', scheme: 'danger', maxHeightMeters: 250, buildings: true };
+
 const ENABLED_PITCH = 55;
 let mapRef = null;
 let controlsWired = false;
-let prevPitch = 0;
+
+// Notify listeners (the permalink) that a user-facing 3D option changed.
+function notifyChange() {
+  document.dispatchEvent(new Event('profile3d:change'));
+}
 
 function emptyFC() {
   return { type: 'FeatureCollection', features: [] };
@@ -53,6 +60,8 @@ export function setupRouteProfile3D(map) {
     controlsWired = true;
   }
   update3D();
+  // Restore the tilted view when arriving with 3D enabled (e.g. from a shared URL).
+  if (options.enabled) applyCamera();
 }
 
 function ensureLayers(map) {
@@ -110,6 +119,7 @@ function setupControls() {
       if (controls) controls.style.display = options.enabled ? 'block' : 'none';
       applyCamera();
       update3D();
+      notifyChange();
     });
   }
 
@@ -123,6 +133,7 @@ function setupControls() {
     height.addEventListener('input', (e) => {
       options.maxHeightMeters = parseFloat(e.target.value) || 250;
       update3D();
+      notifyChange();
     });
   }
 
@@ -132,6 +143,7 @@ function setupControls() {
     buildings.addEventListener('change', (e) => {
       options.buildings = e.target.checked;
       updateBuildingsVisibility();
+      notifyChange();
     });
   }
 }
@@ -143,6 +155,7 @@ function bindSelect(id, key) {
   el.addEventListener('change', (e) => {
     options[key] = e.target.value;
     update3D();
+    notifyChange();
   });
 }
 
@@ -167,14 +180,13 @@ function populateSelectors() {
   }
 }
 
-// Tilt the camera into a 3D view when enabling, restore when disabling.
+// Tilt the camera into a 3D view when enabling, flatten it when disabling.
 function applyCamera() {
   if (!mapRef) return;
   if (options.enabled) {
-    prevPitch = mapRef.getPitch();
     if (mapRef.getPitch() < 30) mapRef.easeTo({ pitch: ENABLED_PITCH, duration: 600 });
   } else {
-    mapRef.easeTo({ pitch: prevPitch || 0, duration: 600 });
+    mapRef.easeTo({ pitch: 0, duration: 600 });
   }
 }
 
@@ -254,4 +266,55 @@ export function clearRouteProfile3D() {
   const src = mapRef.getSource(SOURCE_COLS);
   if (src) src.setData(emptyFC());
   updateBuildingsVisibility();
+}
+
+// ---------------------------------------------------------------------------
+// Shareable URL state — read on first render, serialize on change
+// ---------------------------------------------------------------------------
+
+// Reflect `options` into the DOM controls (safe anytime; no-ops on missing nodes).
+function syncControlsFromOptions() {
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  const setChecked = (id, v) => { const el = document.getElementById(id); if (el) el.checked = v; };
+  setChecked(IDS.toggle, options.enabled);
+  const controls = document.getElementById(IDS.controls);
+  if (controls) controls.style.display = options.enabled ? 'block' : 'none';
+  set(IDS.variant, options.variant);
+  set(IDS.value, options.valueKey);
+  set(IDS.scheme, options.scheme);
+  set(IDS.height, String(options.maxHeightMeters));
+  setChecked(IDS.buildings, options.buildings);
+}
+
+/** URL params for the current 3D state — only when enabled, only non-defaults. */
+export function serializeProfile3DParams() {
+  if (!options.enabled) return [];
+  const parts = ['p3d=1'];
+  if (options.variant !== DEFAULTS.variant) parts.push(`p3dvar=${options.variant}`);
+  if (options.valueKey !== DEFAULTS.valueKey) parts.push(`p3dval=${options.valueKey}`);
+  if (options.scheme !== DEFAULTS.scheme) parts.push(`p3dcolor=${options.scheme}`);
+  if (options.maxHeightMeters !== DEFAULTS.maxHeightMeters) parts.push(`p3dh=${options.maxHeightMeters}`);
+  if (options.buildings !== DEFAULTS.buildings) parts.push(`p3dbld=${options.buildings ? 1 : 0}`);
+  return parts;
+}
+
+/** Read 3D state from URLSearchParams (called once on first render by the permalink). */
+export function applyProfile3DParams(params) {
+  if (!params) return;
+  options.enabled = params.get('p3d') === '1';
+  const variant = params.get('p3dvar');
+  if (variant === 'route' || variant === 'baseline') options.variant = variant;
+  const val = params.get('p3dval');
+  if (val && PROFILE_VALUES[val]) options.valueKey = val;
+  const col = params.get('p3dcolor');
+  if (col && COLOR_SCHEMES[col]) options.scheme = col;
+  const h = parseFloat(params.get('p3dh'));
+  if (Number.isFinite(h) && h > 0) options.maxHeightMeters = Math.min(800, Math.max(50, h));
+  const bld = params.get('p3dbld');
+  if (bld === '0') options.buildings = false;
+  else if (bld === '1') options.buildings = true;
+  // Reflect + redraw if the map/controls are already up (otherwise setup does it).
+  syncControlsFromOptions();
+  update3D();
+  if (options.enabled) applyCamera();
 }

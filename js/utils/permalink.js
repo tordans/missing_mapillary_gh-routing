@@ -18,6 +18,7 @@ import {
 } from '../routing/customModel.js';
 import { MAPILLARY_SLIDER_VALUES, PERMALINK as PERMALINK_CONFIG } from './constants.js';
 import { serializeProfileBarsParams, applyProfileBarsParams } from '../routing/routeProfile/routeProfileBars.js';
+import { serializeProfile3DParams, applyProfile3DParams } from '../routing/routeProfile3D/routeProfile3D.js';
 
 export class Permalink {
   constructor(map) {
@@ -49,8 +50,9 @@ export class Permalink {
     this.setupRouteStateListeners();
     this.setupContextLayerListeners();
 
-    // Route profile bars settings changed → reflect into the shareable URL.
+    // Route profile (2D bars / 3D columns) settings changed → update the URL.
     document.addEventListener('profilebars:change', () => this.updateURL());
+    document.addEventListener('profile3d:change', () => this.updateURL());
   }
 
   setupRouteStateListeners() {
@@ -206,8 +208,9 @@ export class Permalink {
       paramParts.push('missingStreets=1');
     }
 
-    // Route profile bars settings
+    // Route profile bars (2D) + 3D columns settings
     paramParts.push(...serializeProfileBarsParams());
+    paramParts.push(...serializeProfile3DParams());
 
     const newURL = `${window.location.pathname}?${paramParts.join('&')}`;
     window.history.replaceState({}, '', newURL);
@@ -216,9 +219,10 @@ export class Permalink {
   async loadFromURL() {
     const params = new URLSearchParams(window.location.search);
 
-    // Route profile bars settings — set options now so setupRouteProfileBars (on
-    // map load) reflects them in the UI and renders once the route is available.
+    // Route profile bars (2D) + 3D columns settings — set options now so the
+    // setup (on map load) reflects them in the UI and renders with the route.
     applyProfileBarsParams(params);
+    applyProfile3DParams(params);
 
     // Load map state
     const mapParam = params.get('map');
@@ -747,6 +751,7 @@ export class Permalink {
     }
 
     paramParts.push(...serializeProfileBarsParams());
+    paramParts.push(...serializeProfile3DParams());
 
     return `${window.location.origin}${window.location.pathname}?${paramParts.join('&')}`;
   }
