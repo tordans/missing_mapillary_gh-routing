@@ -32,9 +32,18 @@ const options = {
   enabled: false,
   valueKey: 'elevation',
   scheme: 'danger',
-  side: 'right',
+  side: 'east', // 'east' | 'west' (resolved to the route's east/west travel side)
   heightFactor: 0.05, // bar length at t=1 = heightFactor * total route distance
 };
+
+// Defaults used to keep shared URLs short (only non-defaults are serialized).
+const DEFAULTS = { valueKey: 'elevation', scheme: 'danger', side: 'east', heightFactor: 0.05 };
+
+// Notify listeners (e.g. the permalink) that a user-facing option changed, so the
+// shareable URL can be updated. Decoupled via a DOM event — no import cycle.
+function notifyChange() {
+  document.dispatchEvent(new Event('profilebars:change'));
+}
 
 // Screen-space gap between the route line and the baseline the bars sit on.
 const BASELINE_OFFSET_PX = 40;
@@ -65,6 +74,18 @@ function pixelsToMeters(px, coordinates) {
   const lat = latSum / coordinates.length;
   const mPerPx = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, mapRef.getZoom());
   return px * mPerPx;
+}
+
+// Resolve a compass preference ('east'/'west') to a travel-relative side
+// ('right'/'left') for the geometry. The right-hand normal points net-east when
+// the route's overall heading is northward, so the route's net N/S displacement
+// decides which travel side is the east one. Passes 'right'/'left' through.
+function resolveSide(pref, coordinates) {
+  if (pref !== 'east' && pref !== 'west') return pref === 'left' ? 'left' : 'right';
+  const netNorth = coordinates[coordinates.length - 1][1] - coordinates[0][1];
+  const eastIsRight = netNorth >= 0;
+  if (pref === 'west') return eastIsRight ? 'left' : 'right';
+  return eastIsRight ? 'right' : 'left';
 }
 
 /**
@@ -159,6 +180,7 @@ function setupControls() {
       options.enabled = e.target.checked;
       if (controls) controls.style.display = options.enabled ? 'block' : 'none';
       updateRouteProfileBars();
+      notifyChange();
     });
   }
 
@@ -170,8 +192,9 @@ function setupControls() {
   if (height) {
     height.value = String(options.heightFactor);
     height.addEventListener('input', (e) => {
-      options.heightFactor = parseFloat(e.target.value) || 0.08;
+      options.heightFactor = parseFloat(e.target.value) || 0.05;
       updateRouteProfileBars();
+      notifyChange();
     });
   }
 }
@@ -183,6 +206,7 @@ function bindSelect(id, key) {
   el.addEventListener('change', (e) => {
     options[key] = e.target.value;
     updateRouteProfileBars();
+    notifyChange();
   });
 }
 
@@ -251,7 +275,7 @@ export function updateRouteProfileBars() {
   const baseOffsetMeters = pixelsToMeters(BASELINE_OFFSET_PX, data.coordinates);
 
   const result = buildProfileBars(data.coordinates, segValues, {
-    side: options.side,
+    side: resolveSide(options.side, data.coordinates),
     maxBarLengthMeters,
     barWidthMeters,
     smoothingMeters: barWidthMeters * 6, // stronger smoothing -> cleaner baseline
@@ -437,4 +461,57 @@ export function clearRouteProfileBars() {
   if (hoverPopup) hoverPopup.remove();
   removeHandle();
   cursorGeom = null;
+}
+
+// ---------------------------------------------------------------------------
+// Shareable URL state — read on first render, serialize on change
+// ---------------------------------------------------------------------------
+
+// Reflect `options` into the DOM controls (safe anytime; no-ops on missing nodes).
+function syncControlsFromOptions() {
+  const toggle = document.getElementById(IDS.toggle);
+  const controls = document.getElementById(IDS.controls);
+  if (toggle) toggle.checked = options.enabled;
+  if (controls) controls.style.display = options.enabled ? 'block' : 'none';
+  const val = document.getElementById(IDS.value);
+  if (val) val.value = options.valueKey;
+  const scheme = document.getElementById(IDS.scheme);
+  if (scheme) scheme.value = options.scheme;
+  const side = document.getElementById(IDS.side);
+  if (side) side.value = options.side;
+  const height = document.getElementById(IDS.height);
+  if (height) height.value = String(options.heightFactor);
+}
+
+/**
+ * URL params for the current state — only when enabled, and only the values that
+ * differ from the defaults, so shared links stay short. Returns `key=value`[].
+ */
+export function serializeProfileBarsParams() {
+  if (!options.enabled) return [];
+  const parts = ['pbars=1'];
+  if (options.valueKey !== DEFAULTS.valueKey) parts.push(`pbval=${options.valueKey}`);
+  if (options.scheme !== DEFAULTS.scheme) parts.push(`pbcolor=${options.scheme}`);
+  if (options.side !== DEFAULTS.side) parts.push(`pbside=${options.side}`);
+  if (Math.abs(options.heightFactor - DEFAULTS.heightFactor) > 1e-9) {
+    parts.push(`pbh=${options.heightFactor}`);
+  }
+  return parts;
+}
+
+/** Read state from URLSearchParams (called once on first render by the permalink). */
+export function applyProfileBarsParams(params) {
+  if (!params) return;
+  options.enabled = params.get('pbars') === '1';
+  const val = params.get('pbval');
+  if (val && PROFILE_VALUES[val]) options.valueKey = val;
+  const col = params.get('pbcolor');
+  if (col && COLOR_SCHEMES[col]) options.scheme = col;
+  const side = params.get('pbside');
+  if (side === 'east' || side === 'west' || side === 'left' || side === 'right') options.side = side;
+  const h = parseFloat(params.get('pbh'));
+  if (Number.isFinite(h) && h > 0) options.heightFactor = Math.min(0.15, Math.max(0.01, h));
+  // Reflect + redraw if the map/controls are already up (otherwise setup does it).
+  syncControlsFromOptions();
+  updateRouteProfileBars();
 }

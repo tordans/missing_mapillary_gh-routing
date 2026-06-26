@@ -17,6 +17,7 @@ import {
   defaultBikeCustomModel
 } from '../routing/customModel.js';
 import { MAPILLARY_SLIDER_VALUES, PERMALINK as PERMALINK_CONFIG } from './constants.js';
+import { serializeProfileBarsParams, applyProfileBarsParams } from '../routing/routeProfile/routeProfileBars.js';
 
 export class Permalink {
   constructor(map) {
@@ -47,6 +48,9 @@ export class Permalink {
     // For now, we'll update on specific events
     this.setupRouteStateListeners();
     this.setupContextLayerListeners();
+
+    // Route profile bars settings changed → reflect into the shareable URL.
+    document.addEventListener('profilebars:change', () => this.updateURL());
   }
 
   setupRouteStateListeners() {
@@ -201,14 +205,21 @@ export class Permalink {
     if (toggleMissingStreets && toggleMissingStreets.checked) {
       paramParts.push('missingStreets=1');
     }
-    
+
+    // Route profile bars settings
+    paramParts.push(...serializeProfileBarsParams());
+
     const newURL = `${window.location.pathname}?${paramParts.join('&')}`;
     window.history.replaceState({}, '', newURL);
   }
 
   async loadFromURL() {
     const params = new URLSearchParams(window.location.search);
-    
+
+    // Route profile bars settings — set options now so setupRouteProfileBars (on
+    // map load) reflects them in the UI and renders once the route is available.
+    applyProfileBarsParams(params);
+
     // Load map state
     const mapParam = params.get('map');
     if (mapParam) {
@@ -734,7 +745,9 @@ export class Permalink {
     if (toggleMissingStreets && toggleMissingStreets.checked) {
       paramParts.push('missingStreets=1');
     }
-    
+
+    paramParts.push(...serializeProfileBarsParams());
+
     return `${window.location.origin}${window.location.pathname}?${paramParts.join('&')}`;
   }
 }
